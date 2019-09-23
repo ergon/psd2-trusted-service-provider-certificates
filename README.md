@@ -10,6 +10,10 @@ A filename must be provided on the command line and this file will contain the l
 as a result of the execution. The program requires access to the Internet so it can connect to 
 the European Trust List Browser API.
 
+```
+./collect-psd2-trusted-certificates.py -o <filename> [--verbose]
+```
+
 # Disclaimer
 This software is provided as source code under an MIT license (see LICENSE)
 
