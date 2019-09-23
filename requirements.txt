@@ -1,0 +1,5 @@
+lxml
+docopt
+datetime
+cryptography
+requests
