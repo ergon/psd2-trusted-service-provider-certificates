@@ -53,13 +53,18 @@ def write_certs_to_file(certificates: set, path: str):
             f.write("%s\n" % certificate)
 
 
-def not_expired(pem_as_string: str) -> bool:
+def not_expired_or_invalid(pem_as_string: str) -> bool:
     """
     :param pem_as_string: x509 PEM formatted certificate
     :return: False when certificate is expired
     """
     pem_as_byte = str.encode(pem_as_string)
-    cert = x509.load_pem_x509_certificate(pem_as_byte, default_backend())
+    try:
+        cert = x509.load_pem_x509_certificate(pem_as_byte, default_backend())
+    except ValueError as ve:
+        logging.info(f"Unable to parse the following certificate because it contains an invalid value:\n"
+                     + pem_as_string)
+        return False
     current_datetime = datetime.now()
     if current_datetime > cert.not_valid_after:
         logging.info("Expired certificate with serial number '%s'.", cert.serial_number)
@@ -74,11 +79,11 @@ def _find_trusted_service_providers() -> Dict[str, list]:
     :return: dict of trusted service providers by country code
     """
     trusted_service_providers_by_country = {}
-    url = 'https://webgate.ec.europa.eu/tl-browser/api/search/tsp_list'
+    url = 'http://esignature.ec.europa.eu/efda/tl-browser/api/v1/search/tsp_list'
     resp = requests.get(url)
     _assert_status_code(resp.status_code, 200)
-    for company in resp.json()['content']:
-        for service in company['tspservices']:
+    for company in resp.json():
+        for service in company['services']:
             if any("QCertESeal" in s for s in service['qServiceTypes']) \
                     or any("QWAC" in s for s in service['qServiceTypes']):
                 country_code = service['countryCode']
@@ -107,14 +112,16 @@ def _collect_certificates(country_code: str, service_names: list) -> Set[str]:
     :return: collection of x509 certificates as String
     """
     certificates = set()
-    url = f"https://webgate.ec.europa.eu/tl-browser/api/download/{country_code}"
+    url = f"http://esignature.ec.europa.eu/efda/tl-browser/api/v1/browser/download/{country_code}"
     resp = requests.get(url)
     _assert_status_code(resp.status_code, 200)
-    content = resp.json()['content']
+    resp.encoding = "utf-8-sig"
+    content = resp.text
     dom = _create_xml_root_node(content)
     for service_name in service_names:
+        escaped_service_name = service_name.replace('"', '&quot')
         xpath = (
-            f".//ServiceInformation[ServiceName[Name[text()='{service_name}']]]"
+            f".//ServiceInformation[ServiceName[Name[text()=\"{escaped_service_name}\"]]]"
             '/ServiceDigitalIdentity/DigitalId/X509Certificate/text()'
         )
         for certificate in dom.xpath(xpath):
@@ -140,9 +147,8 @@ def _create_xml_root_node(content: str):
     :param content: base64 encode xml string
     :return: XML root node
     """
-    xml_as_string = base64.b64decode(content).decode('utf-8')
     # remove default xml namespace otherwise it can not be parsed
-    xml_as_string = re.sub(' xmlns="[^"]+"', '', xml_as_string, count=1)
+    xml_as_string = re.sub(' xmlns="[^"]+"', '', content, count=1)
     return etree.fromstring(bytes(xml_as_string, encoding='utf-8'))
 
 
@@ -171,7 +177,7 @@ if __name__ == '__main__':
     if verbose:
         logging.basicConfig(format='%(message)s', level=logging.INFO)
     certs = collect()
-    not_expired_certs = [c for c in certs if not_expired(c)]
+    not_expired_certs = [c for c in certs if not_expired_or_invalid(c)]
     cert_count = len(not_expired_certs)
     expired_cert_count = len(certs) - cert_count
     logging.info('Found %s valid certificates and %s expired certificates.', cert_count, expired_cert_count)
